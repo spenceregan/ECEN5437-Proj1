@@ -1,0 +1,6 @@
+﻿lineGeometry,Type,phase conductor,neutral conductor,Phases,Conductors,1_x,1_z,2_x,2_z,3_x,3_z,4_x,4_z,Units
+OH3p,OH,2/0__ACSR,1/0__ACSR,3,4,-5,28,0,28,5,28,0.5,24,ft
+OH2p,OH,1/0__ACSR,,2,2,-5,28,5,28,,,,,ft
+OH1p,OH,1/0__ACSR,1/0__ACSR,1,2,0,28,0.5,24,,,,,ft
+UG3p,CN,3/0_CLASS A_AA,1/3_3/0(19×),3,3,-0.416666667,-4,0,-4,0.416666667,-4,,,ft
+UG1p,CN,2/0_CLASS A_AA,1/3_2/0(19×),1,1,0,-4,,,,,,,ft
