@@ -1,4 +1,5 @@
-﻿src_node,4,12
+﻿Bus,Graph_Loc_x,Graph_Loc_y
+src_node,4,12
 n0,4,11
 n1,0,5
 n2,0,4
@@ -43,3 +44,4 @@ n40,5,2
 n41,5,1
 n42,6,4
 n43,6,3
+n44,3,-1
