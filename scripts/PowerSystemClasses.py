@@ -523,7 +523,7 @@ class DistNetwork(DiGraph):
                                         }, index=terms)
             self.nodes[bus]['voltage'] = bus_voltage
 
-    def plot_bus_voltages(self, source = False):
+    def plot_bus_voltages(self, source = False, sink_lbls: bool = True):
         if source:
             src = source
         else:
@@ -544,7 +544,7 @@ class DistNetwork(DiGraph):
         
         branchtext = []
         for n in subgraph.nodes:
-            if len(DN[n])==0:
+            if len(self[n])==0:
                 for t in self.nodes[n]['hot_terminals']:
                     dist = self.nodes[n]['dist_from_source']
                     vpu = self.nodes[n]['voltage'].Vpu[t]
@@ -572,8 +572,9 @@ class DistNetwork(DiGraph):
         ax.legend(leg_lines, leg_labels, loc='lower left')
             
 
-        for t in branchtext:
-            plt.text(t[0], t[1], t[2])
+        if sink_lbls:
+            for t in branchtext:
+                plt.text(t[0], t[1], t[2])
 
         line_segments = LineCollection(pltlines[1:, :, :], colors = clist)
         ax.add_collection(line_segments)
