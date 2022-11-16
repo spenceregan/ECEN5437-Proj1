@@ -228,7 +228,7 @@ class DistNetwork(DiGraph):
             load_kW = loads_df['kW'][load]
             load_kVAr = loads_df['kVAr'][load]
             phases = loads_df['Phases'][load]
-            kV = loads_df['Phases'][load]
+            kV = loads_df['kV'][load]
             newload = Load(bus=bus, kw=load_kW, kvar=load_kVAr, phases=phases)
             newload.kV = kV
 
