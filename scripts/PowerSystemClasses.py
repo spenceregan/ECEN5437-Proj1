@@ -221,7 +221,7 @@ class DistNetwork(DiGraph):
                           length = newline.length_in_miles(),
                           )
     
-    def add_loads(self, loads_csv):
+    def add_loads(self, loads_csv, use_csv_kv: bool=False):
         loads_df = pd.read_csv(loads_csv)
         for load in loads_df.index:
             bus = loads_df['Bus'][load]
@@ -241,8 +241,9 @@ class DistNetwork(DiGraph):
                 else:
                     pass
             newload.terminals = load_terms
-            #bus_base_Vln = self.nodes[bus]['Vln_base']
-            #newload.set_kV(bus_base_Vln)
+            if use_csv_kv:
+                bus_base_Vln = self.nodes[bus]['Vln_base']
+                newload.set_kV(bus_base_Vln)
             if newload.phases>1:
                 upstrm_xfmr = self.get_upstream_xfmr(bus)
                 if upstrm_xfmr.conn[-1]=='delta':
@@ -329,7 +330,7 @@ class DistNetwork(DiGraph):
                     else:
                         pass
 
-    def add_network_components(self, component_csvs: dict):
+    def add_network_components(self, component_csvs: dict, calc_kV: bool=False):
         
         circuit_csv = Path('..', 'network-data', component_csvs['circuit'])
         self.add_circuit(circuit_csv)
@@ -354,7 +355,7 @@ class DistNetwork(DiGraph):
         self.calc_Vbases()
 
         loads_csv = Path('..', 'network-data', component_csvs['loads'])
-        self.add_loads(loads_csv)
+        self.add_loads(loads_csv, use_csv_kv=calc_kV)
 
         self.calc_electrical_distance()
         
