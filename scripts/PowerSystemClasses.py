@@ -57,9 +57,9 @@ class Load():
 
     def set_kV(self, bus_base_Vln: float):
         if self.phases==3:
-            self.kV = sqrt(3)*bus_base_Vln
+            self.kV = sqrt(3)*bus_base_Vln / 1000
         else:
-            self.kV = bus_base_Vln
+            self.kV = bus_base_Vln / 1000
 
 class Xfmr():
     def __init__(self, xfmr: pd.Series) -> None:
@@ -221,7 +221,7 @@ class DistNetwork(DiGraph):
                           length = newline.length_in_miles(),
                           )
     
-    def add_loads(self, loads_csv, use_csv_kv: bool=False):
+    def add_loads(self, loads_csv, calc_kV: bool=True):
         loads_df = pd.read_csv(loads_csv)
         for load in loads_df.index:
             bus = loads_df['Bus'][load]
@@ -241,7 +241,7 @@ class DistNetwork(DiGraph):
                 else:
                     pass
             newload.terminals = load_terms
-            if use_csv_kv:
+            if calc_kV:
                 bus_base_Vln = self.nodes[bus]['Vln_base']
                 newload.set_kV(bus_base_Vln)
             if newload.phases>1:
