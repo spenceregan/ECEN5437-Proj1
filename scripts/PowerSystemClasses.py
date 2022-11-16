@@ -228,7 +228,9 @@ class DistNetwork(DiGraph):
             load_kW = loads_df['kW'][load]
             load_kVAr = loads_df['kVAr'][load]
             phases = loads_df['Phases'][load]
+            kV = loads_df['Phases'][load]
             newload = Load(bus=bus, kw=load_kW, kvar=load_kVAr, phases=phases)
+            newload.kV = kV
 
             ht = self.nodes[bus]['hot_terminals']
             load_terms = str(loads_df['CondPos'][load])
@@ -239,8 +241,8 @@ class DistNetwork(DiGraph):
                 else:
                     pass
             newload.terminals = load_terms
-            bus_base_Vln = self.nodes[bus]['Vln_base']
-            newload.set_kV(bus_base_Vln)
+            #bus_base_Vln = self.nodes[bus]['Vln_base']
+            #newload.set_kV(bus_base_Vln)
             if newload.phases>1:
                 upstrm_xfmr = self.get_upstream_xfmr(bus)
                 if upstrm_xfmr.conn[-1]=='delta':
