@@ -61,6 +61,26 @@ class Load():
         else:
             self.kV = bus_base_Vln / 1000
 
+class Regulator():
+    def __init__(self, reg_input: pd.Series):
+        self.kVA = reg_input.kVA
+        self.phases = reg_input.phases
+        self.vbase = reg_input.vbase
+        self.vreg = reg_input.vreg
+        self.band = reg_input.band
+        self.CTprim = reg_input.CTprim
+        self.CTsec = reg_input.CTsec
+        self.delay = reg_input.delay
+        self.tapdelay = reg_input.tapdelay
+        if reg_input.gang_operated == 'TRUE':
+            self.gang_op = True
+        else:
+            self.gang_op = False
+        self.type = reg_input.type
+        self.ptratio = 1.0
+        self.R = 0.0
+        self.X = 0.0
+
 class Xfmr():
     def __init__(self, xfmr: pd.Series) -> None:
         self.phases = int(xfmr.phases)
@@ -189,11 +209,21 @@ class DistNetwork(DiGraph):
     
     def add_edge_DN(self, u, v, 
                     line: Line = None, 
-                    xfmr: Xfmr = None, 
+                    xfmr: Xfmr = None,
+                    reg: Regulator = None,
+                    ltc: Regulator = None, 
                     length: float = 0.):
        l = none_to_empty(line)
        x = none_to_empty(xfmr)
-       self.add_edge(u, v, lines = l, xfmrs = x, length = length)
+       r = none_to_empty(reg)
+       tap_change = none_to_empty(ltc)
+       self.add_edge(u, v, 
+                    lines = l, 
+                    xfmrs = x, 
+                    regs = r, 
+                    ltc = tap_change, 
+                    length = length
+                    )
 
     def add_lines(self, lines_csv):
         lines_df = pd.read_csv(lines_csv)
@@ -285,6 +315,38 @@ class DistNetwork(DiGraph):
                     pass
             else:
                 self.add_edge_DN(Bus1, Bus2, xfmr = new_xfmr)
+
+    def add_regulators(self, reg_csv):
+        regulator_df = pd.read_csv(reg_csv)
+        for reg in regulator_df.index:
+            #make a new regulator object
+            reg_row = regulator_df.loc[reg]
+            new_reg = Regulator(reg_row)
+            #get bus to attach regulator to, and upstream bus
+            bus = reg_row.bus
+            upstrm_bus = next(self.predecessors(bus))
+            if reg_row.type == 'Line Regulator':
+                rbus = bus + 'r'
+                #set derived regulator data
+                pt_tr = self.nodes[bus]['Vln_base']/new_reg.vbase
+                new_reg.ptratio = pt_tr
+                #insert new bus for regulator, copy line info to new line
+                bus_attr = self.nodes[bus]
+                self.add_node(rbus, bus_attr)
+                self.nodes[rbus] = self.nodes[bus] #copy node data
+                self.add_edge_DN(upstrm_bus, rbus)
+                self[upstrm_bus][rbus] = self[upstrm_bus][bus] #copy edge data
+                self.remove_edge(upstrm_bus, bus)
+                self.add_edge_DN(rbus, bus, new_reg)
+            elif reg_row.type == 'LTC':
+                prim_voltage = self[upstrm_bus][bus]['xfmrs'][0].kV[-1]
+                conn = self[upstrm_bus][bus]['xfmrs'][0].conn[-1]
+                if conn == 'delta':
+                    pt_tr = prim_voltage / new_reg.vbase
+                elif conn == 'wye':
+                    pt_tr = prim_voltage / sqrt(3) / new_reg.vbase
+                new_reg.ptratio = pt_tr
+                self[upstrm_bus][bus]['regs'].append(new_reg)
 
     def calc_electrical_distance(self):
         source_node = self.circuit['slack_bus']
@@ -419,7 +481,7 @@ class DistNetwork(DiGraph):
         dss.run_command(dss_str)
 
     def new_line_DSS(self, b1: str, b2: str, line: Line, id: int):
-        dss_str = 'New Line.line_'+b1+'-'+b2+'_'+str(id)
+        dss_str = 'New Line.line_'+b1+b2+'_'+str(id)
         dss_str += ' Length=' + str(line.length)
         dss_str += ' Units=' + line.units
         lg = self.line_geoms.loc[line.line_geo]
@@ -430,7 +492,7 @@ class DistNetwork(DiGraph):
         dss.run_command(dss_str)
 
     def new_xfmr_DSS(self, b1: str, b2: str, xfmr: Xfmr, id: int):
-        dss_str = 'new transformer.xfmr_'+b1+'-'+b2+'_'+str(id)
+        dss_str = 'new transformer.xfmr_'+str(id)+b1+b2
         dss_str += ' phases=' + str(xfmr.phases)
         dss_str += ' windings=' + str(xfmr.windings)
         dss_str += ' XHL=' + str(xfmr.xpu)
@@ -444,6 +506,51 @@ class DistNetwork(DiGraph):
             dss_str += ' %R=' + str(xfmr.rpu[w])
         dss.run_command(dss_str)
 
+    def new_reg_DSS(self, b1, b2, reg: Regulator, id: int):
+        
+        if reg.type == 'Line Regulator':
+            for phase in self.nodes[b1]['hot_terminals']:
+                xfmr_name = 'xfmr_'+str(phase)+b2
+                dss_str = 'new transformer.' + xfmr_name
+                dss_str += ' phases=1 windings=2 xhl=0.0001'
+                dss_str += ' wdg=1'
+                dss_str += ' bus=' + str(b1) + '.' + str(phase)
+                dss_str += ' %R=0.0001 conn=wye'
+                dss_str += ' kV=' + str(self.nodes[b1]['Vln_base']/1000)
+                dss_str += ' kVa=' + str(reg.kVA)
+                dss_str += ' wdg=2'
+                dss_str += ' bus=' + str(b2) + '.' + str(phase)
+                dss_str += ' %R=0.0001 conn=wye'
+                dss_str += ' kV=' + str(self.nodes[b1]['Vln_base']/1000)
+                dss_str += ' kVa=' + str(reg.kVA)
+                dss.run_command(dss_str)
+                dss_strr = 'new RegControl.' + 'reg' + str(phase) + b2
+                dss_strr += ' transformer=' + xfmr_name
+                dss_strr += ' windings=2'
+                dss_strr += ' vreg=' + reg.vreg
+                dss_strr += ' band=' + reg.band
+                dss_strr += ' delay=' + reg.delay
+                dss_strr += ' tapdelay=' + reg.tapdelay
+                dss_strr += ' ptratio=' + reg.ptratio
+                dss_strr += ' CTprim=' + reg.CTprim
+                dss_strr += ' R=' + reg.R
+                dss_strr += ' X=' + reg.X
+                dss.run_command(dss_strr)
+
+        elif reg.type=='LTC':
+            for ltc_xfmr in self[b1][b2]['xfmrs']:
+                dss_strr = 'new RegControl.' + 'reg' + str(id) + b2
+                dss_strr += ' transformer=xfmr_' + str(id)+b1+b2
+                dss_strr += ' windings=2'
+                dss_strr += ' vreg=' + reg.vreg
+                dss_strr += ' band=' + reg.band
+                dss_strr += ' delay=' + reg.delay
+                dss_strr += ' tapdelay=' + reg.tapdelay
+                dss_strr += ' ptratio=' + reg.ptratio
+                dss_strr += ' CTprim=' + reg.CTprim
+                dss_strr += ' R=' + reg.R
+                dss_strr += ' X=' + reg.X
+                dss.run_command(dss_strr)
 
     def new_load_DSS(self, node: str, load: Load):
         dss_str = 'New Load.load_' + node
@@ -500,6 +607,15 @@ class DistNetwork(DiGraph):
         vb_str += '[' + ', '.join([str(v) for v in xfmr_Vbases]) + ']'
         dss.run_command(vb_str)
         dss.run_command('Calcvoltagebases')
+
+        #compile regulators
+        for b1, b2, e in self.edges.data('regs'):
+            if e: #in regs attr is a non-empty list then:
+                for r in range(len(self[b1][b2]['regs'])):
+                    reg = self[b1][b2]['regs'][r]
+                    self.new_reg_DSS(b1, b2, reg, r)
+            else: #if lines attr is an empty list then:
+                pass
 
         #compile loads
         for n, load in self.nodes(data='load'):
