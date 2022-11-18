@@ -1,0 +1,4 @@
+﻿bus,kVA,phases,vbase,vreg,band,CTprim,CTsec,delay,tapdelay,gang_operated,type,conn
+n0,5000,3,120,126,2,600,5,300,300,TRUE,LTC,
+n16,750,3,120,124,2,600,5,120,180,FALSE,Line Regulator,
+n18,750,3,120,124,2,600,5,60,120,FALSE,Line Regulator,

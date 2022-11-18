@@ -332,14 +332,14 @@ class DistNetwork(DiGraph):
                 new_reg.ptratio = pt_tr
                 #insert new bus for regulator, copy line info to new line
                 bus_attr = self.nodes[bus]
-                self.add_node(rbus, bus_attr)
-                self.nodes[rbus] = self.nodes[bus] #copy node data
-                self.add_edge_DN(upstrm_bus, rbus)
-                self[upstrm_bus][rbus] = self[upstrm_bus][bus] #copy edge data
+                self.add_node(rbus, **bus_attr)
+                #self.nodes[rbus] = self.nodes[bus] #copy node data
+                edge_attr = self[upstrm_bus][bus]
+                self.add_edge(upstrm_bus, rbus, **edge_attr) #copy edge data
                 self.remove_edge(upstrm_bus, bus)
-                self.add_edge_DN(rbus, bus, new_reg)
+                self.add_edge_DN(rbus, bus, reg=new_reg)
             elif reg_row.type == 'LTC':
-                prim_voltage = self[upstrm_bus][bus]['xfmrs'][0].kV[-1]
+                prim_voltage = self[upstrm_bus][bus]['xfmrs'][0].kV[-1] * 1000
                 conn = self[upstrm_bus][bus]['xfmrs'][0].conn[-1]
                 if conn == 'delta':
                     pt_tr = prim_voltage / new_reg.vbase
@@ -523,34 +523,42 @@ class DistNetwork(DiGraph):
                 dss_str += ' %R=0.0001 conn=wye'
                 dss_str += ' kV=' + str(self.nodes[b1]['Vln_base']/1000)
                 dss_str += ' kVa=' + str(reg.kVA)
-                dss.run_command(dss_str)
-                dss_strr = 'new RegControl.' + 'reg' + str(phase) + b2
+                print(dss_str)
+                reply = dss.run_command(dss_str)
+                print(reply)
+                dss_strr = 'New regcontrol.' + 'reg' + str(phase) + b2
                 dss_strr += ' transformer=' + xfmr_name
-                dss_strr += ' windings=2'
-                dss_strr += ' vreg=' + reg.vreg
-                dss_strr += ' band=' + reg.band
-                dss_strr += ' delay=' + reg.delay
-                dss_strr += ' tapdelay=' + reg.tapdelay
-                dss_strr += ' ptratio=' + reg.ptratio
-                dss_strr += ' CTprim=' + reg.CTprim
-                dss_strr += ' R=' + reg.R
-                dss_strr += ' X=' + reg.X
-                dss.run_command(dss_strr)
+                dss_strr += ' winding=2'
+                dss_strr += ' vreg=' + str(reg.vreg)
+                dss_strr += ' band=' + str(reg.band)
+                dss_strr += ' delay=' + str(reg.delay)
+                dss_strr += ' tapdelay=' + str(reg.tapdelay)
+                dss_strr += ' ptratio=' + str(reg.ptratio)
+                if reg.R>0.0 or reg.X>0.0:
+                    dss_strr += ' CTprim=' + str(reg.CTprim)
+                    dss_strr += ' R=' + str(reg.R)
+                    dss_strr += ' X=' + str(reg.X)
+                #print(dss_strr)
+                reply = dss.run_command(dss_strr)
+                print(reply)
 
         elif reg.type=='LTC':
             for ltc_xfmr in self[b1][b2]['xfmrs']:
-                dss_strr = 'new RegControl.' + 'reg' + str(id) + b2
+                dss_strr = 'New RegControl.' + 'reg' + str(id) + b2
                 dss_strr += ' transformer=xfmr_' + str(id)+b1+b2
-                dss_strr += ' windings=2'
-                dss_strr += ' vreg=' + reg.vreg
-                dss_strr += ' band=' + reg.band
-                dss_strr += ' delay=' + reg.delay
-                dss_strr += ' tapdelay=' + reg.tapdelay
-                dss_strr += ' ptratio=' + reg.ptratio
-                dss_strr += ' CTprim=' + reg.CTprim
-                dss_strr += ' R=' + reg.R
-                dss_strr += ' X=' + reg.X
-                dss.run_command(dss_strr)
+                dss_strr += ' winding=2'
+                dss_strr += ' vreg=' + str(reg.vreg)
+                dss_strr += ' band=' + str(reg.band)
+                dss_strr += ' delay=' + str(reg.delay)
+                dss_strr += ' tapdelay=' + str(reg.tapdelay)
+                dss_strr += ' ptratio=' + str(reg.ptratio)
+                if reg.R>0.0 or reg.X>0.0:
+                    dss_strr += ' CTprim=' + str(reg.CTprim)
+                    dss_strr += ' R=' + str(reg.R)
+                    dss_strr += ' X=' + str(reg.X)
+                #print(dss_strr)
+                reply = dss.run_command(dss_strr)
+                #print(reply)
 
     def new_load_DSS(self, node: str, load: Load):
         dss_str = 'New Load.load_' + node
@@ -564,7 +572,7 @@ class DistNetwork(DiGraph):
         dss.run_command(dss_str)
 
 
-    def compile_DSS(self):
+    def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True):
         self.clear_DSS()
 
         self.new_circuit_DSS()
@@ -586,7 +594,7 @@ class DistNetwork(DiGraph):
         
         #compile lines
         for b1, b2, e in self.edges.data('lines'):
-            if e: #in lines attr is a non-empty list then:
+            if e: #if lines attr is a non-empty list then:
                 for l in range(len(self[b1][b2]['lines'])):
                     line = self[b1][b2]['lines'][l]
                     self.new_line_DSS(b1, b2, line, l)
@@ -609,20 +617,22 @@ class DistNetwork(DiGraph):
         dss.run_command('Calcvoltagebases')
 
         #compile regulators
-        for b1, b2, e in self.edges.data('regs'):
-            if e: #in regs attr is a non-empty list then:
-                for r in range(len(self[b1][b2]['regs'])):
-                    reg = self[b1][b2]['regs'][r]
-                    self.new_reg_DSS(b1, b2, reg, r)
-            else: #if lines attr is an empty list then:
-                pass
+        if incl_regs:
+            for b1, b2, e in self.edges.data('regs'):
+                if e: #in regs attr is a non-empty list then:
+                    for r in range(len(self[b1][b2]['regs'])):
+                        reg = self[b1][b2]['regs'][r]
+                        self.new_reg_DSS(b1, b2, reg, r)
+                else: #if regs attr is an empty list then:
+                    pass
 
         #compile loads
-        for n, load in self.nodes(data='load'):
-            if type(load)==Load:
-                self.new_load_DSS(n, load)
-            else:
-                pass
+        if incl_loads:
+            for n, load in self.nodes(data='load'):
+                if type(load)==Load:
+                    self.new_load_DSS(n, load)
+                else:
+                    pass
 
     def record_DSS_bus_voltages(self):
         for bus in self.nodes:
