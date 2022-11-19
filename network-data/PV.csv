@@ -1,7 +1,7 @@
-﻿bus,kVA,Pmpp,inv_curve,kvar_lim
-n17,300,250,A,0.44
-n2,20,20,A,0.44
-n27,50,50,A,0.44
-n23,300,300,B,0.44
-n32,70,70,B,0.44
-n38,40,40,B,0.44
+﻿bus,kVA,Pmpp,inv_curve,kvar_lim,night_var_support,priority,vvmode
+n17,300,250,cont,0.44,TRUE,vars,voltvar
+n2,20,20,cont,0.44,FALSE,vars,voltvar
+n27,50,50,cont,0.44,FALSE,vars,voltvar
+n23,300,300,deadband,0.44,TRUE,vars,voltvar
+n32,70,70,deadband,0.44,FALSE,vars,voltvar
+n38,40,40,deadband,0.44,FALSE,vars,voltvar

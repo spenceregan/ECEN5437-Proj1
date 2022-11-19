@@ -75,6 +75,12 @@ class PVsystem():
         self.is_delta = False
         self.model= 7
         self.irr_profile = pd.Series(dtype=np.float64)
+        if pv.priority=='vars':
+            self.priority = 'VARMAX'
+        elif pv.priority=='watts':
+            self.priority = 'varmax_watts'
+        self.nightvars = pv.night_var_support
+        self.mode = pv.vvmode
 
     def set_kV(self, bus_base_Vln: float):
         if self.phases>1:
@@ -301,7 +307,7 @@ class DistNetwork(DiGraph):
                     newload.is_delta = True
             self.nodes[bus]['load'] = newload
 
-    def add_PVs(self, PV_csv):
+    def add_pvsystems(self, PV_csv):
         PV_df = pd.read_csv(PV_csv, index_col='bus')
         for bus in PV_df.index:
             pv_row = PV_df.loc[bus]
@@ -423,6 +429,12 @@ class DistNetwork(DiGraph):
             if type(load)==Load:
                 col = random.choice(range(len(profiles.columns)))
                 self.nodes[n]['load'].profile = profiles.iloc[:,col]
+            else: pass
+
+    def assign_all_irradiance (self, profile: pd.Series):
+        for n, pv in self.nodes(data='pv'):
+            if type(pv)==PVsystem:
+                self.nodes[n]['pv'].irr_profile = profile
             else: pass
 
     def check_floating_lines(self):
@@ -618,18 +630,40 @@ class DistNetwork(DiGraph):
         ht = self.nodes[node]['hot_terminals']
         ht_str = '.'.join([str(t) for t in ht])
         dss_str = 'New PVSystem.pv_' + node
-        dss_str += ' bus1=' + node# + '.' + ht_str
+        dss_str += ' bus1=' + node + '.' + ht_str
         dss_str += ' Phases=' + str(PV.phases)
         dss_str += ' kv=' + str(PV.kV)
         dss_str += ' kVA=' + str(PV.kVA)
         dss_str += ' pf=1.0'
-        dss_str += ' kvarlimit=' + str(PV.kVAr_lim * PV.kVA)
+        dss_str += ' kvarmaxabs=' + str(PV.kVAr_lim * PV.kVA)
         dss_str += ' irradiance=' + str(PV.irr)
         dss_str += ' Pmpp=' + str(PV.Pmpp)
+        dss_str += ' %Cutout=0.01 %Cutin=0.01'
+        dss_str += ' varfollowinverter=' + str(PV.nightvars)
         if PV.is_delta:
             dss_str += ' conn=delta'
         dss.run_command(dss_str)
 
+        dss_str = 'New InvControl.invctrl_' + node
+        dss_str += ' DERList =[PVSystem.pv_'+node+']'
+        dss_str += ' mode=' + PV.mode
+        dss_str += ' voltage_curvex_ref=rated'
+        dss_str += ' RefReactivePower=' + PV.priority
+        dss_str += ' vvc_curve1=' + PV.inv_curve
+        dss_str +=  ' DeltaQ_factor=0.25'
+        dss.run_command(dss_str)
+
+    def new_xy_dss(self):
+        curves = self.xy_curves
+        for i in curves.index:
+            xpts = tuple(curves[i][:,0])
+            ypts = tuple(curves[i][:,1])
+            dss_str = 'New XYCurve.' + str(i)
+            dss_str += ' npts=' + str(len(xpts))
+            dss_str += ' Xarray=' + str(xpts).replace(' ' , '')
+            dss_str += ' Yarray=' + str(ypts).replace(' ' , '')
+            print(dss_str)
+            dss.run_command(dss_str)
 
     def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True, incl_PV: bool=True):
         self.clear_DSS()
@@ -697,19 +731,36 @@ class DistNetwork(DiGraph):
                 else:
                     pass
 
+        
         #compile PV
         if incl_PV:
+            self.new_xy_dss()
             for n, pv in self.nodes(data='pv'):
-                if type(load)==PVsystem:
-                    self.new_load_DSS(n, pv)
+                if type(pv)==PVsystem:
+                    self.new_pv_DSS(n,pv)
                 else:
                     pass
+            dss_str = 'New InvControl.invctrl_'
+            dss_str += ' mode=voltvar'
+            dss_str += ' voltage_curvex_ref=rated'
+            dss_str += ' RefReactivePower=varmax'
+            dss_str += ' vvc_curve1=cont'
+            dss_str +=  ' DeltaQ_factor=0.25'
+            print(dss_str)
+            #dss.run_command(dss_str)
 
     def update_loads_DSS(self, time: pd.Timestamp):
         for b, load in self.nodes(data='load'):
             if type(load)==Load:
                 dss_str = 'edit load.load_' + b
                 dss_str += ' kW=' + str(load.profile[time] * load.kW)
+                dss.run_command(dss_str)
+
+    def update_irr_DSS(self, time: pd.Timestamp):
+        for b, pv in self.nodes(data='pv'):
+            if type(pv)==PVsystem:
+                dss_str = 'edit PVsystem.pv_' + b
+                dss_str += ' irradiance=' + str(pv.irr_profile[time] / 1000)
                 dss.run_command(dss_str)
 
     def run_DSS_load_profile(self, times: pd.Timestamp):
@@ -722,6 +773,7 @@ class DistNetwork(DiGraph):
         dss.Solution.StepSize(timestep)
         for t in times:
             self.update_loads_DSS(t)
+            self.update_irr_DSS(t)
             
             dss.run_command('set maxiterations=300')
             dss.run_command('set maxcontroliter=300')
@@ -829,9 +881,8 @@ class DistNetwork(DiGraph):
     def plt_ts_voltages(self):
         fig, ax = plt.subplots(figsize=(12,10))
 
-        ax.plot(self.timeseries, self.vmax, color='tab:orange', label='V_max')
-        ax.plot(self.timeseries, self.vavg, color='tab:green', label='V_avg')
-        ax.plot(self.timeseries, self.vmin, color='tab:blue', label='V_min')
+        ax.fill_between(self.timeseries, self.vmax, self.vmin, alpha=0.25, linewidth=0, color='b', label='V_max - Vmin')
+        ax.plot(self.timeseries, self.vavg, color='tab:blue', linewidth=2, label='V_avg')
 
         ax2 = ax.twinx()
         ax2.plot(self.timeseries, self.vimb, color='tab:red', linestyle=':', label='V_imbalance')
@@ -840,6 +891,7 @@ class DistNetwork(DiGraph):
         ax.set_ylabel('V_ln (pu)')
         ax2.set_ylabel('max voltage imbalance (%)', color='r')
         ax.legend(loc='lower right')
+        ax2.legend(loc='upper right')
 
         plt.tight_layout()
         plt.show()
