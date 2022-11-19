@@ -5,6 +5,7 @@ import pandas as pd
 from pathlib import Path
 from math import sqrt
 import numpy as np
+import random
 
 import opendssdirect as dss
 
@@ -54,6 +55,7 @@ class Load():
         self.kV = 0.0
         self.terminals = ''
         self.is_delta = False
+        self.profile = pd.Series(dtype=np.float64)
 
     def set_kV(self, bus_base_Vln: float):
         if self.phases==3:
@@ -142,7 +144,7 @@ class DistNetwork(DiGraph):
             Loc_x = nodes_df['Graph_Loc_x'][bus]
             Loc_y = nodes_df['Graph_Loc_y'][bus]
             graph_coords = (Loc_x, Loc_y)
-            self.add_node(bus_name, coords = graph_coords, hot_terminals = set())
+            self.add_node(bus_name, coords = graph_coords, hot_terminals = set(), voltage = [])
         self.nodes[self.circuit['slack_bus']]['hot_terminals'].update({1,2,3})
     
     def add_line_geoms(self, lineGeoms_csv):
@@ -381,6 +383,13 @@ class DistNetwork(DiGraph):
     def get_line_terminals(self, node: str):
         prev_node = next(self.predecessors(node))
 
+    def assign_random_load_profile (self, profiles: pd.DataFrame):
+        for n, load in self.nodes(data='load'):
+            if type(load)==Load:
+                col = random.choice(range(len(profiles.columns)))
+                self.nodes[n]['load'].profile = profiles.iloc[:,col]
+            else: pass
+
     def check_floating_lines(self):
         for n in self.nodes:
             n_ht = self.nodes[n]['hot_terminals']
@@ -422,6 +431,11 @@ class DistNetwork(DiGraph):
         self.calc_electrical_distance()
         
         self.check_floating_lines()
+
+        self.vmin = []
+        self.vmax = []
+        self.vavg = []
+        self.vimb = []
 
 
 
@@ -523,9 +537,7 @@ class DistNetwork(DiGraph):
                 dss_str += ' %R=0.0001 conn=wye'
                 dss_str += ' kV=' + str(self.nodes[b1]['Vln_base']/1000)
                 dss_str += ' kVa=' + str(reg.kVA)
-                print(dss_str)
-                reply = dss.run_command(dss_str)
-                print(reply)
+                dss.run_command(dss_str)
                 dss_strr = 'New regcontrol.' + 'reg' + str(phase) + b2
                 dss_strr += ' transformer=' + xfmr_name
                 dss_strr += ' winding=2'
@@ -538,9 +550,7 @@ class DistNetwork(DiGraph):
                     dss_strr += ' CTprim=' + str(reg.CTprim)
                     dss_strr += ' R=' + str(reg.R)
                     dss_strr += ' X=' + str(reg.X)
-                #print(dss_strr)
-                reply = dss.run_command(dss_strr)
-                print(reply)
+                dss.run_command(dss_strr)
 
         elif reg.type=='LTC':
             for ltc_xfmr in self[b1][b2]['xfmrs']:
@@ -556,9 +566,7 @@ class DistNetwork(DiGraph):
                     dss_strr += ' CTprim=' + str(reg.CTprim)
                     dss_strr += ' R=' + str(reg.R)
                     dss_strr += ' X=' + str(reg.X)
-                #print(dss_strr)
-                reply = dss.run_command(dss_strr)
-                #print(reply)
+                dss.run_command(dss_strr)
 
     def new_load_DSS(self, node: str, load: Load):
         dss_str = 'New Load.load_' + node
@@ -634,7 +642,39 @@ class DistNetwork(DiGraph):
                 else:
                     pass
 
+    def update_loads_DSS(self, time: pd.Timestamp):
+        for b, load in self.nodes(data='load'):
+            if type(load)==Load:
+                dss_str = 'edit load.load_' + b
+                dss_str += ' kW=' + str(load.profile[time] * load.kW)
+                dss.run_command(dss_str)
+
+    def run_DSS_load_profile(self, times: pd.Timestamp):
+        timestep = int((times[1]-times[0]).total_seconds())
+        max_voltage = []
+        min_voltage = []
+        average_voltage = []
+        max_imbalance = []
+        dss.Solution.Mode('Direct')
+        dss.Solution.Hour(0)
+        dss.Solution.Seconds(0)
+        dss.Solution.Number(1)
+        dss.Solution.StepSize(timestep)
+        for t in times:
+            self.update_loads_DSS(t)
+            dss.Solution.Solve()
+            self.record_DSS_bus_voltages()
+
+
+
+            dss.Solution.StepSize(timestep)
+        self.timeseries = times
+
+
+
     def record_DSS_bus_voltages(self):
+        all_Vmags = []
+        all_imbs = []
         for bus in self.nodes:
             dss.Circuit.SetActiveBus(bus)
             voltage = np.array(dss.Bus.VMagAngle())
@@ -644,14 +684,36 @@ class DistNetwork(DiGraph):
             vpu = np.array([n[0] + n[1]*1j for n in vpu])
             terms = self.nodes[bus]['hot_terminals']
             vbase = self.nodes[bus]['Vln_base']
+            all_Vmags.extend((1/(vbase))*voltage[:,0])
             bus_voltage = pd.DataFrame({
                                         'Vmag': voltage[:,0], 
                                         'Vang': voltage[:, 1], 
                                         'Vpu': (1/(vbase))*voltage[:,0],
                                         'Vpu_dss': abs(vpu)
                                         }, index=terms)
-            self.nodes[bus]['voltage'] = bus_voltage
-
+            self.nodes[bus]['voltage'].append(bus_voltage)
+            if len(voltage)==3:
+                cvolt = np.array(dss.Bus.Voltages())
+                cvolt = cvolt.reshape(int(cvolt.size/2), 2)
+                cvolt = cvolt[:,0] + 1j * cvolt[:,0]
+                ll = np.array([[1, -1, 0],[0,1,-1],[-1,0,1]])
+                vll = abs(ll @ cvolt)
+                vimb = 100 * abs(vll-vll.mean()).max() / vll.mean()
+                all_imbs.extend(vimb)
+            elif len(voltage)==2:
+                cvolt = np.array(dss.Bus.Voltages())
+                cvolt = cvolt.reshape(int(cvolt.size/2), 2)
+                cvolt = cvolt[:,0] + 1j * cvolt[:,0]
+                vimb = 100 * abs(cvolt[0]-cvolt[1]) / abs(cvolt).mean()
+                all_imbs.extend(vimb)
+            else:
+                pass
+        self.vmax.append(all_Vmags.max())
+        self.vmin.append(all_Vmags.min())
+        self.vavg.append(all_Vmags.mean())
+        self.vimb.append(all_imbs.max())
+        
+    
     def plot_bus_voltages(self, source = False, sink_lbls: bool = True):
         if source:
             src = source
@@ -666,8 +728,8 @@ class DistNetwork(DiGraph):
                 pltline = np.empty((1,2,2))
                 pltline[0, 0, 0] = self.nodes[b1]['dist_from_source']
                 pltline[0, 1, 0] = self.nodes[b2]['dist_from_source']
-                pltline[0, 0, 1] = self.nodes[b1]['voltage'].Vpu[t]
-                pltline[0, 1, 1] = self.nodes[b2]['voltage'].Vpu[t]
+                pltline[0, 0, 1] = self.nodes[b1]['voltage'][0].Vpu[t]
+                pltline[0, 1, 1] = self.nodes[b2]['voltage'][0].Vpu[t]
                 pltlines = np.append(pltlines, pltline, axis=0)
                 clist.append(cdict[t])
         
@@ -676,7 +738,7 @@ class DistNetwork(DiGraph):
             if len(self[n])==0:
                 for t in self.nodes[n]['hot_terminals']:
                     dist = self.nodes[n]['dist_from_source']
-                    vpu = self.nodes[n]['voltage'].Vpu[t]
+                    vpu = self.nodes[n]['voltage'][0].Vpu[t]
                     branchtext.append((dist, vpu, n+'.'+str(t)))
 
         fig, ax = plt.subplots(figsize=(12,10))
