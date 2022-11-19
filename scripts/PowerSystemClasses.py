@@ -662,7 +662,6 @@ class DistNetwork(DiGraph):
             dss_str += ' npts=' + str(len(xpts))
             dss_str += ' Xarray=' + str(xpts).replace(' ' , '')
             dss_str += ' Yarray=' + str(ypts).replace(' ' , '')
-            print(dss_str)
             dss.run_command(dss_str)
 
     def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True, incl_PV: bool=True):
@@ -740,14 +739,6 @@ class DistNetwork(DiGraph):
                     self.new_pv_DSS(n,pv)
                 else:
                     pass
-            dss_str = 'New InvControl.invctrl_'
-            dss_str += ' mode=voltvar'
-            dss_str += ' voltage_curvex_ref=rated'
-            dss_str += ' RefReactivePower=varmax'
-            dss_str += ' vvc_curve1=cont'
-            dss_str +=  ' DeltaQ_factor=0.25'
-            print(dss_str)
-            #dss.run_command(dss_str)
 
     def update_loads_DSS(self, time: pd.Timestamp):
         for b, load in self.nodes(data='load'):
@@ -867,6 +858,7 @@ class DistNetwork(DiGraph):
             leg_lines.append(Line2D([0], [0], color=cdict[t], lw=3))
             leg_labels.append(phase_dict[t])
         ax.legend(leg_lines, leg_labels, loc='lower left')
+        ax.set_title("Line to Neutral Voltages Across All Buses")
             
 
         if sink_lbls:
@@ -892,6 +884,7 @@ class DistNetwork(DiGraph):
         ax2.set_ylabel('max voltage imbalance (%)', color='r')
         ax.legend(loc='lower right')
         ax2.legend(loc='upper right')
+        ax.set_title("Min, Max, and Average Line to Neutral Voltages Across All Buses")
 
         plt.tight_layout()
         plt.show()
@@ -909,6 +902,7 @@ class DistNetwork(DiGraph):
         ax.set_xlabel('timestamp')
         ax.set_ylabel('V_ln (pu)')
         ax.legend(loc='lower right')
+        ax.set_title("Line to Neutral Voltages at Bus "+bus)
 
         plt.tight_layout()
         plt.show()
