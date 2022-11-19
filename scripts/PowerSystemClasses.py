@@ -48,7 +48,7 @@ class Line():
         return len
 
 class Load():
-    def __init__(self, bus: str, kw: float, kvar: float, phases: int):
+    def __init__(self, kw: float, kvar: float, phases: int):
         self.kW = kw
         self.kvar = kvar
         self.phases = phases
@@ -58,7 +58,26 @@ class Load():
         self.profile = pd.Series(dtype=np.float64)
 
     def set_kV(self, bus_base_Vln: float):
-        if self.phases==3:
+        if self.phases>1:
+            self.kV = sqrt(3)*bus_base_Vln / 1000
+        else:
+            self.kV = bus_base_Vln / 1000
+
+class PVsystem():
+    def __init__(self, pv: pd.Series):
+        self.kVA = pv.kVA
+        self.kVAr_lim = pv.kvar_lim
+        self.inv_curve = pv.inv_curve
+        self.Pmpp = pv.Pmpp
+        self.phases = 0
+        self.kV = 0.0
+        self.irr = 1.0
+        self.is_delta = False
+        self.model= 7
+        self.irr_profile = pd.Series(dtype=np.float64)
+
+    def set_kV(self, bus_base_Vln: float):
+        if self.phases>1:
             self.kV = sqrt(3)*bus_base_Vln / 1000
         else:
             self.kV = bus_base_Vln / 1000
@@ -261,7 +280,7 @@ class DistNetwork(DiGraph):
             load_kVAr = loads_df['kVAr'][load]
             phases = loads_df['Phases'][load]
             kV = loads_df['kV'][load]
-            newload = Load(bus=bus, kw=load_kW, kvar=load_kVAr, phases=phases)
+            newload = Load(kw=load_kW, kvar=load_kVAr, phases=phases)
             newload.kV = kV
 
             ht = self.nodes[bus]['hot_terminals']
@@ -281,6 +300,21 @@ class DistNetwork(DiGraph):
                 if upstrm_xfmr.conn[-1]=='delta':
                     newload.is_delta = True
             self.nodes[bus]['load'] = newload
+
+    def add_PVs(self, PV_csv):
+        PV_df = pd.read_csv(PV_csv, index_col='bus')
+        for bus in PV_df.index:
+            pv_row = PV_df.loc[bus]
+            new_pv = PVsystem(pv_row)
+            ht = self.nodes[bus]['hot_terminals']
+            new_pv.phases = len(ht)
+            bus_base_Vln = self.nodes[bus]['Vln_base']
+            new_pv.set_kV(bus_base_Vln)
+            if new_pv.phases>1:
+                upstrm_xfmr = self.get_upstream_xfmr(bus)
+                if upstrm_xfmr.conn[-1]=='delta':
+                    new_pv.is_delta = True
+            self.nodes[bus]['pv'] = new_pv
 
     def downstream_loads(self, node: str, as_kVA: bool = False):
         ds_nodes = [node]
@@ -580,8 +614,24 @@ class DistNetwork(DiGraph):
             dss_str += ' conn=delta'
         dss.run_command(dss_str)
 
+    def new_pv_DSS(self, node: str, PV: PVsystem):
+        ht = self.nodes[node]['hot_terminals']
+        ht_str = '.'.join([str(t) for t in ht])
+        dss_str = 'New PVSystem.pv_' + node
+        dss_str += ' bus1=' + node# + '.' + ht_str
+        dss_str += ' Phases=' + str(PV.phases)
+        dss_str += ' kv=' + str(PV.kV)
+        dss_str += ' kVA=' + str(PV.kVA)
+        dss_str += ' pf=1.0'
+        dss_str += ' kvarlimit=' + str(PV.kVAr_lim * PV.kVA)
+        dss_str += ' irradiance=' + str(PV.irr)
+        dss_str += ' Pmpp=' + str(PV.Pmpp)
+        if PV.is_delta:
+            dss_str += ' conn=delta'
+        dss.run_command(dss_str)
 
-    def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True):
+
+    def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True, incl_PV: bool=True):
         self.clear_DSS()
         self.vmin = []
         self.vmax = []
@@ -644,6 +694,14 @@ class DistNetwork(DiGraph):
             for n, load in self.nodes(data='load'):
                 if type(load)==Load:
                     self.new_load_DSS(n, load)
+                else:
+                    pass
+
+        #compile PV
+        if incl_PV:
+            for n, pv in self.nodes(data='pv'):
+                if type(load)==PVsystem:
+                    self.new_load_DSS(n, pv)
                 else:
                     pass
 
