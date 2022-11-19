@@ -214,7 +214,7 @@ class DistNetwork(DiGraph):
                     xfmr: Xfmr = None,
                     reg: Regulator = None,
                     ltc: Regulator = None, 
-                    length: float = 0.):
+                    length: float = 0.0):
        l = none_to_empty(line)
        x = none_to_empty(xfmr)
        r = none_to_empty(reg)
@@ -335,6 +335,7 @@ class DistNetwork(DiGraph):
                 #insert new bus for regulator, copy line info to new line
                 bus_attr = self.nodes[bus]
                 self.add_node(rbus, **bus_attr)
+                self.nodes[rbus]['voltage'] = []
                 #self.nodes[rbus] = self.nodes[bus] #copy node data
                 edge_attr = self[upstrm_bus][bus]
                 self.add_edge(upstrm_bus, rbus, **edge_attr) #copy edge data
@@ -582,6 +583,10 @@ class DistNetwork(DiGraph):
 
     def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True):
         self.clear_DSS()
+        self.vmin = []
+        self.vmax = []
+        self.vavg = []
+        self.vimb = []
 
         self.new_circuit_DSS()
 
@@ -651,22 +656,19 @@ class DistNetwork(DiGraph):
 
     def run_DSS_load_profile(self, times: pd.Timestamp):
         timestep = int((times[1]-times[0]).total_seconds())
-        max_voltage = []
-        min_voltage = []
-        average_voltage = []
-        max_imbalance = []
-        dss.Solution.Mode('Direct')
+
+        dss.Solution.Mode(2)
         dss.Solution.Hour(0)
         dss.Solution.Seconds(0)
         dss.Solution.Number(1)
         dss.Solution.StepSize(timestep)
         for t in times:
             self.update_loads_DSS(t)
+            
+            dss.run_command('set maxiterations=300')
+            dss.run_command('set maxcontroliter=300')
             dss.Solution.Solve()
             self.record_DSS_bus_voltages()
-
-
-
             dss.Solution.StepSize(timestep)
         self.timeseries = times
 
@@ -695,23 +697,17 @@ class DistNetwork(DiGraph):
             if len(voltage)==3:
                 cvolt = np.array(dss.Bus.Voltages())
                 cvolt = cvolt.reshape(int(cvolt.size/2), 2)
-                cvolt = cvolt[:,0] + 1j * cvolt[:,0]
+                cvolt = cvolt[:,0] + 1j * cvolt[:,1]
                 ll = np.array([[1, -1, 0],[0,1,-1],[-1,0,1]])
                 vll = abs(ll @ cvolt)
                 vimb = 100 * abs(vll-vll.mean()).max() / vll.mean()
-                all_imbs.extend(vimb)
-            elif len(voltage)==2:
-                cvolt = np.array(dss.Bus.Voltages())
-                cvolt = cvolt.reshape(int(cvolt.size/2), 2)
-                cvolt = cvolt[:,0] + 1j * cvolt[:,0]
-                vimb = 100 * abs(cvolt[0]-cvolt[1]) / abs(cvolt).mean()
-                all_imbs.extend(vimb)
+                all_imbs.append(vimb)
             else:
                 pass
-        self.vmax.append(all_Vmags.max())
-        self.vmin.append(all_Vmags.min())
-        self.vavg.append(all_Vmags.mean())
-        self.vimb.append(all_imbs.max())
+        self.vmax.append(np.array(all_Vmags).max())
+        self.vmin.append(np.array(all_Vmags).min())
+        self.vavg.append(np.array(all_Vmags).mean())
+        self.vimb.append(np.array(all_imbs).max())
         
     
     def plot_bus_voltages(self, source = False, sink_lbls: bool = True):
@@ -770,4 +766,39 @@ class DistNetwork(DiGraph):
         line_segments = LineCollection(pltlines[1:, :, :], colors = clist)
         ax.add_collection(line_segments)
 
+        plt.show()
+
+    def plt_ts_voltages(self):
+        fig, ax = plt.subplots(figsize=(12,10))
+
+        ax.plot(self.timeseries, self.vmax, color='tab:orange', label='V_max')
+        ax.plot(self.timeseries, self.vavg, color='tab:green', label='V_avg')
+        ax.plot(self.timeseries, self.vmin, color='tab:blue', label='V_min')
+
+        ax2 = ax.twinx()
+        ax2.plot(self.timeseries, self.vimb, color='tab:red', linestyle=':', label='V_imbalance')
+
+        ax.set_xlabel('timestamp')
+        ax.set_ylabel('V_ln (pu)')
+        ax2.set_ylabel('max voltage imbalance (%)', color='r')
+        ax.legend(loc='lower right')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plt_bus_ts(self, bus):
+        cdict = {1: 'r', 2: 'g', 3: 'b'}
+        phase_dict = {1: 'phase a', 2: 'phase b', 3: 'phase c'}
+
+        fig, ax = plt.subplots(figsize=(12,10))
+
+        for t in self.nodes[bus]['hot_terminals']:
+            pu_volt = [v.Vpu[t] for v in self.nodes[bus]['voltage']]
+            ax.plot(self.timeseries, pu_volt, color=cdict[t], label=phase_dict[t])
+
+        ax.set_xlabel('timestamp')
+        ax.set_ylabel('V_ln (pu)')
+        ax.legend(loc='lower right')
+
+        plt.tight_layout()
         plt.show()
