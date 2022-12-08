@@ -6,6 +6,7 @@ from pathlib import Path
 from math import sqrt
 import numpy as np
 import random
+from scipy.optimize import differential_evolution as de
 
 import opendssdirect as dss
 
@@ -66,8 +67,10 @@ class Load():
 class PVsystem():
     def __init__(self, pv: pd.Series):
         self.kVA = pv.kVA
+        self.kvar = 0
         self.kVAr_lim = pv.kvar_lim
         self.inv_curve = pv.inv_curve
+        self.inv_curve_vals = []
         self.Pmpp = pv.Pmpp
         self.phases = 0
         self.kV = 0.0
@@ -105,8 +108,8 @@ class Regulator():
             self.gang_op = False
         self.type = reg_input.type
         self.ptratio = 1.0
-        self.R = 0.0
-        self.X = 0.0
+        self.R = reg_input.R
+        self.X = reg_input.X
 
 class Xfmr():
     def __init__(self, xfmr: pd.Series) -> None:
@@ -160,7 +163,7 @@ class DistNetwork(DiGraph):
     def add_circuit(self, circuit_csv):
         circuit_df = pd.read_csv(circuit_csv)
         circuit_dict = circuit_df.squeeze().to_dict()
-        self.circuit = circuit_dict    
+        self.circuit = circuit_dict 
     
     def add_nodes(self, node_csv):
         nodes_df = pd.read_csv(node_csv)
@@ -567,7 +570,7 @@ class DistNetwork(DiGraph):
             dss_str += ' %R=' + str(xfmr.rpu[w])
         dss.run_command(dss_str)
 
-    def new_reg_DSS(self, b1, b2, reg: Regulator, id: int):
+    def new_reg_DSS(self, b1, b2, reg: Regulator, id: int, opt: bool):
         
         if reg.type == 'Line Regulator':
             for phase in self.nodes[b1]['hot_terminals']:
@@ -585,34 +588,53 @@ class DistNetwork(DiGraph):
                 dss_str += ' kV=' + str(self.nodes[b1]['Vln_base']/1000)
                 dss_str += ' kVa=' + str(reg.kVA)
                 dss.run_command(dss_str)
-                dss_strr = 'New regcontrol.' + 'reg' + str(phase) + b2
-                dss_strr += ' transformer=' + xfmr_name
-                dss_strr += ' winding=2'
-                dss_strr += ' vreg=' + str(reg.vreg)
-                dss_strr += ' band=' + str(reg.band)
-                dss_strr += ' delay=' + str(reg.delay)
-                dss_strr += ' tapdelay=' + str(reg.tapdelay)
-                dss_strr += ' ptratio=' + str(reg.ptratio)
-                if reg.R>0.0 or reg.X>0.0:
-                    dss_strr += ' CTprim=' + str(reg.CTprim)
-                    dss_strr += ' R=' + str(reg.R)
-                    dss_strr += ' X=' + str(reg.X)
-                dss.run_command(dss_strr)
+                if not opt:
+                    dss_strr = 'New regcontrol.' + 'reg' + str(phase) + b2
+                    dss_strr += ' transformer=' + xfmr_name
+                    dss_strr += ' winding=2'
+                    dss_strr += ' vreg=' + str(reg.vreg)
+                    dss_strr += ' band=' + str(reg.band)
+                    dss_strr += ' delay=' + str(reg.delay)
+                    dss_strr += ' tapdelay=' + str(reg.tapdelay)
+                    dss_strr += ' ptratio=' + str(reg.ptratio)
+                    if reg.R>0.0 or reg.X>0.0:
+                        dss_strr += ' CTprim=' + str(reg.CTprim)
+                        dss_strr += ' R=' + str(reg.R)
+                        dss_strr += ' X=' + str(reg.X)
+                    dss.run_command(dss_strr)
+
+        elif reg.type=='LTC':
+            if True:
+                for ltc_xfmr in self[b1][b2]['xfmrs']:
+                    dss_strr = 'New RegControl.' + 'reg' + str(id) + b2
+                    dss_strr += ' transformer=xfmr_' + str(id)+b1+b2
+                    dss_strr += ' winding=2'
+                    dss_strr += ' vreg=' + str(reg.vreg)
+                    dss_strr += ' band=' + str(reg.band)
+                    dss_strr += ' delay=' + str(reg.delay)
+                    dss_strr += ' tapdelay=' + str(reg.tapdelay)
+                    dss_strr += ' ptratio=' + str(reg.ptratio)
+                    if reg.R>0.0 or reg.X>0.0:
+                        dss_strr += ' CTprim=' + str(reg.CTprim)
+                        dss_strr += ' R=' + str(reg.R)
+                        dss_strr += ' X=' + str(reg.X)
+                    dss.run_command(dss_strr)
+
+    def update_reg_DSS(self, b1, b2, reg: Regulator, id: int, taps: list):
+        
+        if reg.type == 'Line Regulator':
+            for phase in self.nodes[b1]['hot_terminals']:
+                tap_pu = 1 + int(taps.pop(0)) / 32
+                xfmr_name = 'xfmr_'+str(phase)+b2
+                dss_str = 'edit transformer.' + xfmr_name
+                dss_str += ' tap=' + tap_pu
+                dss.run_command(dss_str)
 
         elif reg.type=='LTC':
             for ltc_xfmr in self[b1][b2]['xfmrs']:
-                dss_strr = 'New RegControl.' + 'reg' + str(id) + b2
-                dss_strr += ' transformer=xfmr_' + str(id)+b1+b2
-                dss_strr += ' winding=2'
-                dss_strr += ' vreg=' + str(reg.vreg)
-                dss_strr += ' band=' + str(reg.band)
-                dss_strr += ' delay=' + str(reg.delay)
-                dss_strr += ' tapdelay=' + str(reg.tapdelay)
-                dss_strr += ' ptratio=' + str(reg.ptratio)
-                if reg.R>0.0 or reg.X>0.0:
-                    dss_strr += ' CTprim=' + str(reg.CTprim)
-                    dss_strr += ' R=' + str(reg.R)
-                    dss_strr += ' X=' + str(reg.X)
+                tap_pu = 1 + int(taps.pop(0)) / 32
+                dss_strr = 'edit transformer=xfmr_' + str(id)+b1+b2
+                dss_str += ' tap=' + tap_pu
                 dss.run_command(dss_strr)
 
     def new_load_DSS(self, node: str, load: Load):
@@ -626,7 +648,7 @@ class DistNetwork(DiGraph):
             dss_str += ' conn=delta'
         dss.run_command(dss_str)
 
-    def new_pv_DSS(self, node: str, PV: PVsystem):
+    def new_pv_DSS(self, node: str, PV: PVsystem, opt: bool = False):
         ht = self.nodes[node]['hot_terminals']
         ht_str = '.'.join([str(t) for t in ht])
         dss_str = 'New PVSystem.pv_' + node
@@ -634,7 +656,7 @@ class DistNetwork(DiGraph):
         dss_str += ' Phases=' + str(PV.phases)
         dss_str += ' kv=' + str(PV.kV)
         dss_str += ' kVA=' + str(PV.kVA)
-        dss_str += ' pf=1.0'
+        dss_str += ' kvar=' + str(PV.kvar)
         dss_str += ' kvarmaxabs=' + str(PV.kVAr_lim * PV.kVA)
         dss_str += ' irradiance=' + str(PV.irr)
         dss_str += ' Pmpp=' + str(PV.Pmpp)
@@ -644,13 +666,35 @@ class DistNetwork(DiGraph):
             dss_str += ' conn=delta'
         dss.run_command(dss_str)
 
-        dss_str = 'New InvControl.invctrl_' + node
-        dss_str += ' DERList =[PVSystem.pv_'+node+']'
-        dss_str += ' mode=' + PV.mode
-        dss_str += ' voltage_curvex_ref=rated'
-        dss_str += ' RefReactivePower=' + PV.priority
-        dss_str += ' vvc_curve1=' + PV.inv_curve
-        dss_str +=  ' DeltaQ_factor=0.25'
+        if not opt:
+            self.xy_curves = pd.Series({
+                'cont': np.array([[0.1, 1],[0.95, 1],[1.05,-1],[1.9, -1]]),
+                'deadband': np.array([[0.1, 1],[0.95, 1],[0.98, 0],[1.02,0],[1.05,-1],[1.9, -1]])
+                })
+
+            curves = self.xy_curves
+
+            xpts = tuple(curves[PV.inv_curve][:,0])
+            ypts = tuple(curves[PV.inv_curve][:,1])
+            PV.inv_curve_vals = curves[PV.inv_curve]
+            dss_str = 'New XYCurve.' + node + '_vvc_xy'
+            dss_str += ' npts=' + str(len(xpts))
+            dss_str += ' Xarray=' + str(xpts).replace(' ' , '')
+            dss_str += ' Yarray=' + str(ypts).replace(' ' , '')
+            dss.run_command(dss_str)
+            
+            dss_str = 'New InvControl.invctrl_' + node
+            dss_str += ' DERList =[PVSystem.pv_'+node+']'
+            dss_str += ' mode=' + PV.mode
+            dss_str += ' voltage_curvex_ref=rated'
+            dss_str += ' RefReactivePower=' + PV.priority
+            dss_str += ' vvc_curve1=' + node + '_vvc_xy'
+            dss_str +=  ' DeltaQ_factor=0.25'
+            dss.run_command(dss_str)
+
+    def update_vvc_DSS(self, node: str, PV: PVsystem):
+        dss_str = 'Edit XYCurve.' + node + '_vvc_xy'
+        dss_str += 'Xarray=' + str(PV.inv_curve_vals[:,0]).replace(' ', '')
         dss.run_command(dss_str)
 
     def new_xy_dss(self):
@@ -664,7 +708,7 @@ class DistNetwork(DiGraph):
             dss_str += ' Yarray=' + str(ypts).replace(' ' , '')
             dss.run_command(dss_str)
 
-    def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True, incl_PV: bool=True):
+    def compile_DSS(self, incl_loads: bool=True, incl_regs: bool=True, incl_PV: bool=True, opt: bool = False):
         self.clear_DSS()
         self.vmin = []
         self.vmax = []
@@ -718,7 +762,7 @@ class DistNetwork(DiGraph):
                 if e: #in regs attr is a non-empty list then:
                     for r in range(len(self[b1][b2]['regs'])):
                         reg = self[b1][b2]['regs'][r]
-                        self.new_reg_DSS(b1, b2, reg, r)
+                        self.new_reg_DSS(b1, b2, reg, r, opt=opt)
                 else: #if regs attr is an empty list then:
                     pass
 
@@ -736,7 +780,7 @@ class DistNetwork(DiGraph):
             self.new_xy_dss()
             for n, pv in self.nodes(data='pv'):
                 if type(pv)==PVsystem:
-                    self.new_pv_DSS(n,pv)
+                    self.new_pv_DSS(n,pv, opt)
                 else:
                     pass
 
@@ -753,6 +797,27 @@ class DistNetwork(DiGraph):
                 dss_str = 'edit PVsystem.pv_' + b
                 dss_str += ' irradiance=' + str(pv.irr_profile[time] / 1000)
                 dss.run_command(dss_str)
+
+    def update_vreg_DSS(self):
+        for b, pv in self.nodes(data='pv'):
+            if type(pv)==PVsystem:
+                dss_str = 'edit PVsystem.pv_' + b
+                dss_str += ' pf=' + str(pv.pf)
+                dss.run_command(dss_str)
+
+        # for b1, b2, e in network.edges.data('regs'):
+        #     if e: #in regs attr is a non-empty list then:
+        #         for reg in range(len(network[b1][b2]['regs'])):
+        #             if reg.type == 'Line Regulator':
+        #                 for phase in self.nodes[b1]['hot_terminals']:
+        #                     dss_strr = 'edit regcontrol.' + 'reg' + str(phase) + b2
+        #                     dss_strr += ' vreg=' + str(reg.vreg)
+        #                     dss.run_command(dss_strr)
+        #             elif reg.type=='LTC':
+        #                 for ltc_xfmr in self[b1][b2]['xfmrs']:
+        #                     dss_strr = 'edit RegControl.' + 'reg' + str(id) + b2
+        #                     dss_strr += ' vreg=' + str(reg.vreg)
+        #                     dss.run_command(dss_strr)
 
     def run_DSS_load_profile(self, times: pd.Timestamp):
         timestep = int((times[1]-times[0]).total_seconds())
@@ -773,7 +838,30 @@ class DistNetwork(DiGraph):
             dss.Solution.StepSize(timestep)
         self.timeseries = times
 
+    def run_DSS_load_profile_opt(self, times: pd.Timestamp):
+        timestep = int((times[1]-times[0]).total_seconds())
 
+        dss.Solution.Mode(2)
+        dss.Solution.Hour(0)
+        dss.Solution.Seconds(0)
+        dss.Solution.Number(1)
+        dss.Solution.StepSize(timestep)
+        dss.run_command('set maxiterations=300')
+        dss.run_command('set maxcontroliter=300')
+        bounds, dss_str, num_regs = self.get_vimb_bounds_names()
+        print(dss_str)
+        for t in times:
+            self.update_loads_DSS(t)
+            self.update_irr_DSS(t)
+            print(t)
+            print("starting optimization")
+            opt = de(self.update_vimb_inputs, args=(dss_str,num_regs), bounds=bounds, popsize=15, maxiter=50)
+            print(opt.x)
+            print(opt.fun)
+
+            self.record_DSS_bus_voltages()
+            dss.Solution.StepSize(timestep)
+        self.timeseries = times
 
     def record_DSS_bus_voltages(self):
         all_Vmags = []
@@ -809,6 +897,40 @@ class DistNetwork(DiGraph):
         self.vmin.append(np.array(all_Vmags).min())
         self.vavg.append(np.array(all_Vmags).mean())
         self.vimb.append(np.array(all_imbs).max())
+
+    def review_DSS_bus_voltages(self):
+        all_Vmags = []
+        all_imbs = []
+        for bus in self.nodes:
+            dss.Circuit.SetActiveBus(bus)
+            voltage = np.array(dss.Bus.VMagAngle())
+            vpu = np.array(dss.Bus.PuVoltage())
+            voltage = voltage.reshape(int(voltage.size/2),2)
+            vpu = vpu.reshape(int(vpu.size/2),2)
+            vpu = np.array([n[0] + n[1]*1j for n in vpu])
+            terms = self.nodes[bus]['hot_terminals']
+            vbase = self.nodes[bus]['Vln_base']
+            all_Vmags.extend((1/(vbase))*voltage[:,0])
+            bus_voltage = pd.DataFrame({
+                                        'Vmag': voltage[:,0], 
+                                        'Vang': voltage[:, 1], 
+                                        'Vpu': (1/(vbase))*voltage[:,0],
+                                        'Vpu_dss': abs(vpu)
+                                        }, index=terms)
+            self.nodes[bus]['voltage'].append(bus_voltage)
+            if len(voltage)==3:
+                cvolt = np.array(dss.Bus.Voltages())
+                cvolt = cvolt.reshape(int(cvolt.size/2), 2)
+                cvolt = cvolt[:,0] + 1j * cvolt[:,1]
+                ll = np.array([[1, -1, 0],[0,1,-1],[-1,0,1]])
+                vll = abs(ll @ cvolt)
+                vimb = 100 * abs(vll-vll.mean()).max() / vll.mean()
+                all_imbs.append(vimb)
+            else:
+                pass
+
+        vminmax_penalty = 10 * int(np.array(all_Vmags).max()>1.05 or np.array(all_Vmags).min()<0.95)
+        return (np.array(all_imbs).max() + vminmax_penalty)
         
     
     def plot_bus_voltages(self, source = False, sink_lbls: bool = True):
@@ -906,3 +1028,83 @@ class DistNetwork(DiGraph):
 
         plt.tight_layout()
         plt.show()
+
+    def vimb_cost(self):
+        cost = sqrt(np.square(self.vimb).mean())
+
+        if self.vmax.max() > 1.05 or self.vmin.min() < 0.95:
+            cost = 100
+        else:
+            pass
+
+        return cost
+
+    def get_vimb_bounds_names(self):
+        de_input_names = []
+        de_input_bounds = []
+        num_regs = 0
+
+        for b1, b2, e in self.edges.data('regs'):
+                if e: #in regs attr is a non-empty list then:
+                    for r in range(len(self[b1][b2]['regs'])):
+                        reg = self[b1][b2]['regs'][r]
+                        if reg.type == 'Line Regulator':
+                            for phase in self.nodes[b1]['hot_terminals']:
+                                de_input_bounds.append((-16,16))
+                                dss_str = 'edit transformer.xfmr_'+str(phase)+b2+' tap='
+                                de_input_names.append(dss_str)
+                                num_regs += 1
+
+
+                        elif reg.type=='LTC':
+                            for ltc_xfmr in self[b1][b2]['xfmrs']:
+                                de_input_bounds.append((-16,16))
+                                dss_str = 'edit transformer=xfmr_0'+b1+b2+' tap='
+                                de_input_names.append(dss_str)
+                                num_regs += 1
+        
+        for n, pv in self.nodes(data='pv'):
+            if type(pv)==PVsystem:
+                kvar = pv.kVAr_lim * pv.kVA
+                de_input_bounds.append((-1 * kvar,kvar))
+                dss_str = 'edit PVsystem.pv_'+n+' kvar='
+                de_input_names.append(dss_str)
+            else:
+                pass
+        return  de_input_bounds, de_input_names, num_regs
+
+    def update_vimb_inputs(self, de_inputs: list, names, null):
+        de_inputs = list(de_inputs)
+        
+        for i in range(len(de_inputs)):
+            if i<8:
+                tap_pu = 1 + int(de_inputs[i]) / 160
+                dss_str = names[i] + str(tap_pu)
+                dss.run_command(dss_str)
+            else:
+                dss_str = names[i] + str(de_inputs[i])
+                dss.run_command(dss_str)
+
+        dss.Solution.StepSize(0)
+        dss.Solution.Solve()
+        vimb = self.review_DSS_bus_voltages()
+
+        return vimb
+
+    def update_vimb_inputs_parallel(self, de_inputs: list, names, num_regs):
+        de_inputs = list(de_inputs)
+        
+        for i in range(len(de_inputs)):
+            if i<num_regs:
+                tap_pu = 1 + int(de_inputs[i]) / 160
+                dss_str = names[i] + str(tap_pu)
+                dss.run_command(dss_str)
+            else:
+                dss_str = names[i] + str(de_inputs[i])
+                dss.run_command(dss_str)
+
+        dss.Solution.StepSize(0)
+        dss.Solution.Solve()
+        vimb = self.review_DSS_bus_voltages()
+
+        return vimb
